@@ -1,0 +1,15 @@
+{
+  "name": "notify-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Unified notification gateway backed by Alertmanager",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test",
+    "check": "node --check src/*.js test/*.js"
+  },
+  "dependencies": {
+    "fastify": "^4.29.0"
+  }
+}
