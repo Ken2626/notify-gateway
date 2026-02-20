@@ -5,7 +5,7 @@
 
 ## 0. 一次性前置（先做）
 
-你说“不会配置一次性前置”对应的完整手册在：
+配置一次性前置对应的完整手册在：
 
 - `docs/one-time-bootstrap.md`
 
@@ -23,6 +23,7 @@ bash ./scripts/one-time-bootstrap.sh
 3. Artifact Registry 已创建：`us-west1/notify-gateway`
 4. Cloud Run 服务 `notify-gateway` 已存在
 5. Cloud Run 已有必需环境变量：`NOTIFY_GATEWAY_TOKEN`、`ALERTMANAGER_WEBHOOK_TOKEN`
+6. （可选）Cloud Run 已设置 `NOTIFY_TIMEZONE`（未设置时默认 `UTC`）
 
 ## 1. 开发并推送到 main
 
@@ -132,6 +133,14 @@ gcloud run services update notify-gateway \
 ```
 
 说明：当前 workflow 每次部署都会执行一次上述路由写入，所以若你手工改了路由但 workflow 里没改，下一次 `push main` 会被 workflow 值覆盖。
+
+时区配置单独更新（不会被当前 workflow 覆盖）：
+
+```bash
+gcloud run services update notify-gateway \
+  --region us-west1 \
+  --update-env-vars "NOTIFY_TIMEZONE=Asia/Shanghai"
+```
 
 ## 6. 常见失败与定位
 

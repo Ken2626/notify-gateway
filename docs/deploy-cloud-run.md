@@ -27,14 +27,25 @@ gcloud run services update notify-gateway \
   --update-env-vars "^@^ENABLED_CHANNELS=tg,wecom,serverchan@ROUTE_CRITICAL=tg,wecom@ROUTE_WARNING=wecom@ROUTE_INFO=tg@DEDUPE_WINDOW_MS=45000"
 ```
 
+This route update command does not modify `NOTIFY_TIMEZONE`.
+
 ## Required runtime env vars
 
 - `NOTIFY_GATEWAY_TOKEN`
 - `ALERTMANAGER_WEBHOOK_TOKEN`
+- `NOTIFY_TIMEZONE` (optional, default `UTC`, e.g. `Asia/Shanghai`)
 - `TG_BOT_TOKEN`
 - `TG_CHAT_ID`
 - `WECOM_WEBHOOK_URL`
 - `SERVERCHAN_SENDKEY` (optional)
+
+Set or update timezone example:
+
+```bash
+gcloud run services update notify-gateway \
+  --region us-west1 \
+  --update-env-vars "NOTIFY_TIMEZONE=Asia/Shanghai"
+```
 
 ## Domain with Cloudflare
 

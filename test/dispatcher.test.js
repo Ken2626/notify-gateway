@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DedupeCache, resolveChannels } from "../src/dispatcher.js";
+import { DedupeCache, formatTimestampForNotify, resolveChannels } from "../src/dispatcher.js";
 
 test("dedupe cache drops duplicate key in window", () => {
   const cache = new DedupeCache(45000);
@@ -67,4 +67,9 @@ test("resolve channels supports explicit overrides and mute", () => {
     config
   );
   assert.deepEqual(muted, []);
+});
+
+test("format timestamp with configured timezone", () => {
+  const formatted = formatTimestampForNotify("2026-01-01T00:00:00Z", "Asia/Shanghai");
+  assert.equal(formatted, "2026-01-01 08:00:00 (Asia/Shanghai)");
 });

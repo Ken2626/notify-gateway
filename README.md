@@ -28,6 +28,12 @@ Unified notification gateway using **Alertmanager + Dispatcher** in a single con
 - `warning -> wecom`
 - `info -> tg`
 
+## Timezone
+
+- `NOTIFY_TIMEZONE` controls timestamp display in notification content.
+- default: `UTC`
+- example: `Asia/Shanghai`
+
 ## Local run
 
 ```bash
@@ -43,6 +49,7 @@ bash ./scripts/one-time-bootstrap.sh
 ```
 
 On Debian/Ubuntu, the script can prompt to auto-install missing `gcloud` (and `gh` if needed).
+It also asks for `NOTIFY_TIMEZONE` interactively (default `UTC`).
 
 ## Docker
 
@@ -58,11 +65,11 @@ curl -X POST http://127.0.0.1:8080/ingest/v1/event \
   -H "Authorization: Bearer $NOTIFY_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "source": "oraclemev",
+    "source": "my-bot",
     "severity": "critical",
-    "summary": "oracle deviation detected",
-    "description": "price deviates over threshold"
+    "summary": "high-priority event detected",
+    "description": "event exceeds configured threshold"
   }'
 ```
 
-See `docs/one-time-bootstrap.md`, `docs/push-main-to-cloud-run.md`, `docs/deploy-cloud-run.md`, `docs/github-actions-oidc.md`, and `docs/oraclemev-migration.md` for deployment and integration.
+See `docs/one-time-bootstrap.md`, `docs/push-main-to-cloud-run.md`, `docs/deploy-cloud-run.md`, and `docs/github-actions-oidc.md` for deployment and integration.

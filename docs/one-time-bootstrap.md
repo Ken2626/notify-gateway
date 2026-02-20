@@ -19,13 +19,14 @@ bash ./scripts/one-time-bootstrap.sh
 3. Service Account 与 IAM 绑定
 4. Workload Identity Pool/Provider 创建
 5. GitHub Actions secrets/variable 写入（可选，依赖 `gh`）
-6. Cloud Run 初始服务创建或更新（含必需 token 与默认路由）
+6. Cloud Run 初始服务创建或更新（含必需 token、默认路由、通知时区）
 
 依赖处理说明：
 
 1. 缺少 `gcloud` 时，脚本会提示自动安装（当前支持 Debian/Ubuntu 的 `apt`，需要 `sudo` 或 root）
 2. 缺少 `gh` 时，只有在你选择“自动写入 GitHub secrets/variables”才会提示安装
 3. 如果 `apt` 被系统里其他半安装软件包阻塞，脚本会自动尝试 `dpkg --configure -a` 与 `apt-get -f install` 后重试
+4. 脚本会交互询问 `NOTIFY_TIMEZONE`（默认 `UTC`），有 `node` 时会校验时区格式
 
 ## 手工方式（逐条命令）
 
@@ -52,7 +53,7 @@ export PROJECT_ID="your-gcp-project-id"
 export REGION="us-west1"
 export GAR_REPO="notify-gateway"
 export SERVICE_NAME="notify-gateway"
-export IMAGE_NAME="notify-gateway"
+export NOTIFY_TIMEZONE="UTC"
 
 export GITHUB_OWNER="your-github-owner"
 export GITHUB_REPO="notify-gateway"
@@ -220,7 +221,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --memory 512Mi \
   --concurrency 20 \
   --timeout 30 \
-  --set-env-vars "^@^NOTIFY_GATEWAY_TOKEN=${NOTIFY_GATEWAY_TOKEN}@ALERTMANAGER_WEBHOOK_TOKEN=${ALERTMANAGER_WEBHOOK_TOKEN}@ENABLED_CHANNELS=tg,wecom,serverchan@ROUTE_CRITICAL=tg,wecom@ROUTE_WARNING=wecom@ROUTE_INFO=tg@DEDUPE_WINDOW_MS=45000"
+  --set-env-vars "^@^NOTIFY_GATEWAY_TOKEN=${NOTIFY_GATEWAY_TOKEN}@ALERTMANAGER_WEBHOOK_TOKEN=${ALERTMANAGER_WEBHOOK_TOKEN}@ENABLED_CHANNELS=tg,wecom,serverchan@ROUTE_CRITICAL=tg,wecom@ROUTE_WARNING=wecom@ROUTE_INFO=tg@DEDUPE_WINDOW_MS=45000@NOTIFY_TIMEZONE=${NOTIFY_TIMEZONE}"
 ```
 
 可选：补上渠道密钥（也可以在 Cloud Run 控制台里填）：
@@ -241,6 +242,7 @@ gcloud run services update "${SERVICE_NAME}" \
 3. GCP 有 `us-west1` 的 Artifact Registry 仓库 `notify-gateway`
 4. Cloud Run 服务 `notify-gateway` 已存在
 5. Cloud Run 服务里已有 `NOTIFY_GATEWAY_TOKEN` 和 `ALERTMANAGER_WEBHOOK_TOKEN`
+6. Cloud Run 服务里已有 `NOTIFY_TIMEZONE`（或默认按 `UTC`）
 
 ## 10. 首次验证自动部署
 

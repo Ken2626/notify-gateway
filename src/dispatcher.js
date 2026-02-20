@@ -124,6 +124,52 @@ function formatLabels(labels) {
   return entries.map(([k, v]) => `${k}=${v}`).join(", ");
 }
 
+const timeFormatterCache = new Map();
+
+function getTimeFormatter(timeZone) {
+  if (!timeFormatterCache.has(timeZone)) {
+    timeFormatterCache.set(
+      timeZone,
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      })
+    );
+  }
+  return timeFormatterCache.get(timeZone);
+}
+
+function getPart(parts, type, fallback = "--") {
+  const matched = parts.find((part) => part.type === type);
+  return matched ? matched.value : fallback;
+}
+
+export function formatTimestampForNotify(raw, timeZone = "UTC") {
+  if (!raw) return "-";
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return String(raw);
+
+  try {
+    const formatter = getTimeFormatter(timeZone);
+    const parts = formatter.formatToParts(parsed);
+    const y = getPart(parts, "year", "0000");
+    const m = getPart(parts, "month", "00");
+    const d = getPart(parts, "day", "00");
+    const hh = getPart(parts, "hour", "00");
+    const mm = getPart(parts, "minute", "00");
+    const ss = getPart(parts, "second", "00");
+    return `${y}-${m}-${d} ${hh}:${mm}:${ss} (${timeZone})`;
+  } catch {
+    return parsed.toISOString();
+  }
+}
+
 export function resolveChannels(alert, config) {
   const labels = alert.labels || {};
   const annotations = alert.annotations || {};
@@ -151,12 +197,14 @@ function buildMessage(alert, payloadStatus) {
   const alertname = String(labels.alertname || "GatewayEvent");
   const summary = String(annotations.summary || annotations.description || "(no summary)");
   const description = String(annotations.description || "");
+  const notifyTimezone = config.notifyTimezone || "UTC";
 
   const title = `[${severity.toUpperCase()}][${status.toUpperCase()}][${source}] ${alertname}`;
   const lines = [
     `summary: ${summary}`,
     description ? `description: ${description}` : null,
-    `startsAt: ${alert.startsAt || "-"}`,
+    `startsAt: ${formatTimestampForNotify(alert.startsAt, notifyTimezone)}`,
+    alert.endsAt ? `endsAt: ${formatTimestampForNotify(alert.endsAt, notifyTimezone)}` : null,
     `labels: ${formatLabels(labels)}`,
   ].filter(Boolean);
 

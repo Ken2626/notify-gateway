@@ -24,6 +24,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate required GitHub vars/secrets
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+        run: |
+          set -euo pipefail
+          [ -n "${GCP_PROJECT_ID}" ] || { echo "::error::Missing repository variable GCP_PROJECT_ID"; exit 1; }
+          [ -n "${GCP_WORKLOAD_IDENTITY_PROVIDER}" ] || { echo "::error::Missing repository secret GCP_WORKLOAD_IDENTITY_PROVIDER"; exit 1; }
+          [ -n "${GCP_SERVICE_ACCOUNT_EMAIL}" ] || { echo "::error::Missing repository secret GCP_SERVICE_ACCOUNT_EMAIL"; exit 1; }
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:

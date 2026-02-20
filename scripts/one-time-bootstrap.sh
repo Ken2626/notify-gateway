@@ -26,6 +26,28 @@ run_sensitive() {
   "$@"
 }
 
+retry_run() {
+  local max_attempts="$1"
+  local retry_delay="$2"
+  shift 2
+  local attempt=1
+
+  while true; do
+    say "+ $*"
+    if "$@"; then
+      return 0
+    fi
+
+    if [[ "${attempt}" -ge "${max_attempts}" ]]; then
+      return 1
+    fi
+
+    warn "Attempt ${attempt}/${max_attempts} failed. Retrying in ${retry_delay}s."
+    sleep "${retry_delay}"
+    attempt=$((attempt + 1))
+  done
+}
+
 trim() {
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -281,6 +303,22 @@ service_exists() {
   gcloud run services describe "$service_name" --project "$project_id" --region "$region" >/dev/null 2>&1
 }
 
+wait_for_service_account() {
+  local sa_email="$1"
+  local project_id="$2"
+  local timeout_seconds="${3:-120}"
+  local deadline=$((SECONDS + timeout_seconds))
+
+  while [[ "${SECONDS}" -lt "${deadline}" ]]; do
+    if gcloud iam service-accounts describe "${sa_email}" --project "${project_id}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 3
+  done
+
+  return 1
+}
+
 append_env_kv() {
   local current="$1"
   local key="$2"
@@ -291,6 +329,28 @@ append_env_kv() {
     printf '%s=%s' "$key" "$value"
   else
     printf '%s%s%s=%s' "$current" "$delim" "$key" "$value"
+  fi
+}
+
+print_github_settings_commands() {
+  local repo_full="$1"
+  local project_id="$2"
+  local wif_provider="$3"
+  local sa_email="$4"
+
+  say "gh variable set GCP_PROJECT_ID --repo ${repo_full} --body ${project_id}"
+  say "gh secret set GCP_WORKLOAD_IDENTITY_PROVIDER --repo ${repo_full} --body \"${wif_provider}\""
+  say "gh secret set GCP_SERVICE_ACCOUNT_EMAIL --repo ${repo_full} --body \"${sa_email}\""
+}
+
+validate_timezone_if_possible() {
+  local timezone="$1"
+  if command -v node >/dev/null 2>&1; then
+    if ! node -e "new Intl.DateTimeFormat('en-US', { timeZone: process.argv[1] });" "${timezone}" >/dev/null 2>&1; then
+      die "Invalid NOTIFY_TIMEZONE: ${timezone}"
+    fi
+  else
+    warn "node is not installed; NOTIFY_TIMEZONE format was not validated."
   fi
 }
 
@@ -323,6 +383,7 @@ DEFAULT_SERVICE_NAME="notify-gateway"
 DEFAULT_SA_ID="notify-gateway-gha"
 DEFAULT_WIF_POOL_ID="github-pool"
 DEFAULT_WIF_PROVIDER_ID="github-oidc"
+DEFAULT_NOTIFY_TIMEZONE="UTC"
 
 GIT_GUESS="$(guess_github_repo_from_git "$REPO_ROOT" || true)"
 DEFAULT_GITHUB_OWNER="$(printf '%s' "$GIT_GUESS" | awk '{print $1}')"
@@ -340,6 +401,8 @@ prompt_required GITHUB_REPO "GitHub repository name" "$DEFAULT_GITHUB_REPO"
 prompt_required SA_ID "Service Account id (without domain)" "$DEFAULT_SA_ID"
 prompt_required WIF_POOL_ID "Workload Identity Pool id" "$DEFAULT_WIF_POOL_ID"
 prompt_required WIF_PROVIDER_ID "Workload Identity Provider id" "$DEFAULT_WIF_PROVIDER_ID"
+prompt_with_default NOTIFY_TIMEZONE "Notify timezone (IANA, e.g. UTC/Asia/Shanghai/America/Los_Angeles)" "$DEFAULT_NOTIFY_TIMEZONE"
+validate_timezone_if_possible "${NOTIFY_TIMEZONE}"
 
 SA_EMAIL="${SA_ID}@${PROJECT_ID}.iam.gserviceaccount.com"
 
@@ -351,6 +414,7 @@ say "- GAR_REPO: ${GAR_REPO}"
 say "- SERVICE_NAME: ${SERVICE_NAME}"
 say "- GITHUB_REPO: ${GITHUB_OWNER}/${GITHUB_REPO}"
 say "- SA_EMAIL: ${SA_EMAIL}"
+say "- NOTIFY_TIMEZONE: ${NOTIFY_TIMEZONE}"
 say
 
 if ! confirm "Continue with these settings?" "y"; then
@@ -389,19 +453,28 @@ fi
 
 say
 say "Ensuring Service Account exists..."
-if gcloud iam service-accounts describe "${SA_EMAIL}" >/dev/null 2>&1; then
+if gcloud iam service-accounts describe "${SA_EMAIL}" --project "${PROJECT_ID}" >/dev/null 2>&1; then
   say "Service Account exists: ${SA_EMAIL}"
 else
   run gcloud iam service-accounts create "${SA_ID}" \
+    --project "${PROJECT_ID}" \
     --display-name "notify-gateway github deployer"
+fi
+
+say
+say "Waiting for Service Account propagation..."
+if ! wait_for_service_account "${SA_EMAIL}" "${PROJECT_ID}" 120; then
+  die "Service Account ${SA_EMAIL} is not visible after waiting."
 fi
 
 say
 say "Granting IAM roles to Service Account..."
 for ROLE in roles/run.admin roles/artifactregistry.writer roles/iam.serviceAccountUser; do
-  run gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  if ! retry_run 6 5 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
     --member "serviceAccount:${SA_EMAIL}" \
-    --role "${ROLE}"
+    --role "${ROLE}"; then
+    die "Failed to grant ${ROLE} to ${SA_EMAIL} after retries."
+  fi
 done
 
 say
@@ -439,10 +512,12 @@ fi
 
 say
 say "Granting workloadIdentityUser binding..."
-run gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
+if ! retry_run 6 5 gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
   --project "${PROJECT_ID}" \
   --role roles/iam.workloadIdentityUser \
-  --member "principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WIF_POOL_ID}/attribute.repository/${GITHUB_OWNER}/${GITHUB_REPO}"
+  --member "principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WIF_POOL_ID}/attribute.repository/${GITHUB_OWNER}/${GITHUB_REPO}"; then
+  die "Failed to grant roles/iam.workloadIdentityUser to GitHub principal after retries."
+fi
 
 WIF_PROVIDER_RESOURCE="$(gcloud iam workload-identity-pools providers describe "${WIF_PROVIDER_ID}" \
   --project "${PROJECT_ID}" \
@@ -462,7 +537,10 @@ say "- Secret:   GCP_SERVICE_ACCOUNT_EMAIL=${SA_EMAIL}"
 
 if confirm "Set GitHub variable/secret automatically with gh CLI?" "y"; then
   if ! ensure_gh_available; then
-    warn "Skipping gh auto-write. Please set GitHub variable/secrets manually."
+    warn "gh is unavailable, cannot auto-write GitHub variable/secrets."
+    say "Run these commands manually after installing gh:"
+    print_github_settings_commands "${GITHUB_OWNER}/${GITHUB_REPO}" "${PROJECT_ID}" "${WIF_PROVIDER_RESOURCE}" "${SA_EMAIL}"
+    die "Missing gh blocked GitHub variable/secret setup."
   else
     if ! gh auth status >/dev/null 2>&1; then
       run gh auth login
@@ -473,6 +551,8 @@ if confirm "Set GitHub variable/secret automatically with gh CLI?" "y"; then
   fi
 else
   warn "Skipped gh auto-write. Please set the GitHub variable/secrets manually."
+  say "Manual commands:"
+  print_github_settings_commands "${GITHUB_OWNER}/${GITHUB_REPO}" "${PROJECT_ID}" "${WIF_PROVIDER_RESOURCE}" "${SA_EMAIL}"
 fi
 
 say
@@ -491,6 +571,7 @@ BASE_ENV="$(append_env_kv "${BASE_ENV}" "ROUTE_CRITICAL" "tg,wecom" "@")"
 BASE_ENV="$(append_env_kv "${BASE_ENV}" "ROUTE_WARNING" "wecom" "@")"
 BASE_ENV="$(append_env_kv "${BASE_ENV}" "ROUTE_INFO" "tg" "@")"
 BASE_ENV="$(append_env_kv "${BASE_ENV}" "DEDUPE_WINDOW_MS" "45000" "@")"
+BASE_ENV="$(append_env_kv "${BASE_ENV}" "NOTIFY_TIMEZONE" "${NOTIFY_TIMEZONE}" "@")"
 
 say
 if service_exists "${SERVICE_NAME}" "${PROJECT_ID}" "${REGION}"; then

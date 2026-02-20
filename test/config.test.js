@@ -63,3 +63,42 @@ test("route channels are filtered by enabled channels", () => {
     }
   );
 });
+
+test("notify timezone defaults to UTC and supports override", () => {
+  withEnv(
+    {
+      NOTIFY_GATEWAY_TOKEN: "token-a",
+      ALERTMANAGER_WEBHOOK_TOKEN: "token-b",
+      NOTIFY_TIMEZONE: null,
+    },
+    () => {
+      const config = loadConfig();
+      assert.equal(config.notifyTimezone, "UTC");
+    }
+  );
+
+  withEnv(
+    {
+      NOTIFY_GATEWAY_TOKEN: "token-a",
+      ALERTMANAGER_WEBHOOK_TOKEN: "token-b",
+      NOTIFY_TIMEZONE: "Asia/Shanghai",
+    },
+    () => {
+      const config = loadConfig();
+      assert.equal(config.notifyTimezone, "Asia/Shanghai");
+    }
+  );
+});
+
+test("invalid notify timezone throws", () => {
+  withEnv(
+    {
+      NOTIFY_GATEWAY_TOKEN: "token-a",
+      ALERTMANAGER_WEBHOOK_TOKEN: "token-b",
+      NOTIFY_TIMEZONE: "Mars/Olympus",
+    },
+    () => {
+      assert.throws(() => loadConfig(), /NOTIFY_TIMEZONE is invalid/);
+    }
+  );
+});

@@ -36,6 +36,16 @@ function parseRetrySchedule(raw) {
   return parsed;
 }
 
+function parseTimezone(raw) {
+  const value = String(raw || "UTC").trim() || "UTC";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return value;
+  } catch {
+    throw new Error(`NOTIFY_TIMEZONE is invalid: ${value}`);
+  }
+}
+
 export function loadConfig() {
   const enabledChannels = normalizeChannels(
     parseCsvList(process.env.ENABLED_CHANNELS, ["tg", "wecom", "serverchan"])
@@ -62,6 +72,7 @@ export function loadConfig() {
   const config = {
     port: parsePositiveInt(process.env.PORT, 8080),
     alertmanagerPort: parsePositiveInt(process.env.ALERTMANAGER_PORT, 9093),
+    notifyTimezone: parseTimezone(process.env.NOTIFY_TIMEZONE),
     notifyGatewayToken: process.env.NOTIFY_GATEWAY_TOKEN || "",
     alertmanagerWebhookToken: process.env.ALERTMANAGER_WEBHOOK_TOKEN || "",
     dedupeWindowMs: parsePositiveInt(process.env.DEDUPE_WINDOW_MS, 45000),
