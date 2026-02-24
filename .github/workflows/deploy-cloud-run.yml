@@ -89,4 +89,4 @@ jobs:
           gcloud run services update "${SERVICE_NAME}" \
             --project "${PROJECT_ID}" \
             --region "${REGION}" \
-            --update-env-vars "^@^ENABLED_CHANNELS=tg,wecom,serverchan@ROUTE_CRITICAL=tg,wecom@ROUTE_WARNING=wecom@ROUTE_INFO=tg@DEDUPE_WINDOW_MS=45000"
+            --update-env-vars "^@^ENABLED_CHANNELS=tg,wecom,serverchan@ROUTE_CRITICAL=tg,wecom@ROUTE_WARNING=tg,wecom@ROUTE_INFO=tg,wecom@DEDUPE_WINDOW_MS=45000"

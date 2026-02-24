@@ -1,22 +1,15 @@
-FROM prom/alertmanager:v0.27.0 AS alertmanager
-
-FROM node:20-alpine
+FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY src ./src
+COPY gateway ./gateway
 COPY scripts ./scripts
 
-COPY --from=alertmanager /bin/alertmanager /usr/local/bin/alertmanager
-
-RUN chmod +x /usr/local/bin/alertmanager /app/scripts/entrypoint.sh
-
-ENV NODE_ENV=production
+ENV PYTHONUNBUFFERED=1
 ENV PORT=8080
-ENV ALERTMANAGER_PORT=9093
 
 EXPOSE 8080
 

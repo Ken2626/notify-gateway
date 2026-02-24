@@ -1,0 +1,1 @@
+"""notify-gateway python package."""

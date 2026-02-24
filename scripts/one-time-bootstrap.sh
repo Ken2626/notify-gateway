@@ -345,12 +345,30 @@ print_github_settings_commands() {
 
 validate_timezone_if_possible() {
   local timezone="$1"
-  if command -v node >/dev/null 2>&1; then
-    if ! node -e "new Intl.DateTimeFormat('en-US', { timeZone: process.argv[1] });" "${timezone}" >/dev/null 2>&1; then
+  if command -v python3 >/dev/null 2>&1; then
+    if ! python3 - "$timezone" <<'PY' >/dev/null 2>&1
+import sys
+from zoneinfo import ZoneInfo
+
+ZoneInfo(sys.argv[1])
+PY
+    then
       die "Invalid NOTIFY_TIMEZONE: ${timezone}"
     fi
   else
-    warn "node is not installed; NOTIFY_TIMEZONE format was not validated."
+    warn "python3 is not installed; NOTIFY_TIMEZONE format was not validated."
+  fi
+}
+
+validate_domain_if_provided() {
+  local domain="$1"
+  if [[ -z "$domain" ]]; then
+    return 0
+  fi
+
+  # Basic FQDN validation for common domain shapes.
+  if [[ ! "$domain" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]]; then
+    die "Invalid custom domain: ${domain}"
   fi
 }
 
@@ -384,6 +402,7 @@ DEFAULT_SA_ID="notify-gateway-gha"
 DEFAULT_WIF_POOL_ID="github-pool"
 DEFAULT_WIF_PROVIDER_ID="github-oidc"
 DEFAULT_NOTIFY_TIMEZONE="UTC"
+DEFAULT_CUSTOM_DOMAIN=""
 
 GIT_GUESS="$(guess_github_repo_from_git "$REPO_ROOT" || true)"
 DEFAULT_GITHUB_OWNER="$(printf '%s' "$GIT_GUESS" | awk '{print $1}')"
@@ -403,6 +422,8 @@ prompt_required WIF_POOL_ID "Workload Identity Pool id" "$DEFAULT_WIF_POOL_ID"
 prompt_required WIF_PROVIDER_ID "Workload Identity Provider id" "$DEFAULT_WIF_PROVIDER_ID"
 prompt_with_default NOTIFY_TIMEZONE "Notify timezone (IANA, e.g. UTC/Asia/Shanghai/America/Los_Angeles)" "$DEFAULT_NOTIFY_TIMEZONE"
 validate_timezone_if_possible "${NOTIFY_TIMEZONE}"
+prompt_with_default CUSTOM_DOMAIN "Custom notify domain (optional, e.g. ng.example.com; empty to skip)" "$DEFAULT_CUSTOM_DOMAIN"
+validate_domain_if_provided "${CUSTOM_DOMAIN}"
 
 SA_EMAIL="${SA_ID}@${PROJECT_ID}.iam.gserviceaccount.com"
 
@@ -415,6 +436,11 @@ say "- SERVICE_NAME: ${SERVICE_NAME}"
 say "- GITHUB_REPO: ${GITHUB_OWNER}/${GITHUB_REPO}"
 say "- SA_EMAIL: ${SA_EMAIL}"
 say "- NOTIFY_TIMEZONE: ${NOTIFY_TIMEZONE}"
+if [[ -n "${CUSTOM_DOMAIN}" ]]; then
+  say "- CUSTOM_DOMAIN: ${CUSTOM_DOMAIN}"
+else
+  say "- CUSTOM_DOMAIN: (skip)"
+fi
 say
 
 if ! confirm "Continue with these settings?" "y"; then
@@ -568,8 +594,8 @@ BASE_ENV="NOTIFY_GATEWAY_TOKEN=${NOTIFY_GATEWAY_TOKEN}"
 BASE_ENV="$(append_env_kv "${BASE_ENV}" "ALERTMANAGER_WEBHOOK_TOKEN" "${ALERTMANAGER_WEBHOOK_TOKEN}" "@")"
 BASE_ENV="$(append_env_kv "${BASE_ENV}" "ENABLED_CHANNELS" "tg,wecom,serverchan" "@")"
 BASE_ENV="$(append_env_kv "${BASE_ENV}" "ROUTE_CRITICAL" "tg,wecom" "@")"
-BASE_ENV="$(append_env_kv "${BASE_ENV}" "ROUTE_WARNING" "wecom" "@")"
-BASE_ENV="$(append_env_kv "${BASE_ENV}" "ROUTE_INFO" "tg" "@")"
+BASE_ENV="$(append_env_kv "${BASE_ENV}" "ROUTE_WARNING" "tg,wecom" "@")"
+BASE_ENV="$(append_env_kv "${BASE_ENV}" "ROUTE_INFO" "tg,wecom" "@")"
 BASE_ENV="$(append_env_kv "${BASE_ENV}" "DEDUPE_WINDOW_MS" "45000" "@")"
 BASE_ENV="$(append_env_kv "${BASE_ENV}" "NOTIFY_TIMEZONE" "${NOTIFY_TIMEZONE}" "@")"
 
@@ -641,6 +667,41 @@ fi
 say
 say "Bootstrap completed."
 say
+SERVICE_URL="$(gcloud run services describe "${SERVICE_NAME}" --project "${PROJECT_ID}" --region "${REGION}" --format='value(status.url)' || true)"
+if [[ -n "${SERVICE_URL}" ]]; then
+  say "Service URL: ${SERVICE_URL}"
+fi
+
+if [[ -n "${CUSTOM_DOMAIN}" ]]; then
+  say
+  say "Custom domain setup:"
+  if confirm "Try to create Cloud Run domain mapping for ${CUSTOM_DOMAIN} now?" "y"; then
+    if ! run gcloud beta run domain-mappings create \
+      --project "${PROJECT_ID}" \
+      --region "${REGION}" \
+      --service "${SERVICE_NAME}" \
+      --domain "${CUSTOM_DOMAIN}"; then
+      warn "Domain mapping create failed. You can retry manually after ownership verification."
+    fi
+  else
+    warn "Skipped automatic domain mapping create."
+  fi
+
+  say
+  say "Check required DNS records for Cloudflare:"
+  if ! run gcloud beta run domain-mappings describe \
+    --project "${PROJECT_ID}" \
+    --region "${REGION}" \
+    --domain "${CUSTOM_DOMAIN}" \
+    --format='yaml(status.resourceRecords,status.conditions)'; then
+    warn "Could not describe domain mapping yet. This is common before mapping is created or verified."
+  fi
+
+  say
+  say "After DNS is ready, bots should use:"
+  say "   NOTIFY_GATEWAY_URL=https://${CUSTOM_DOMAIN}"
+fi
+
 say "Next:"
 say "1) Push code to main to trigger deployment:"
 say "   git push origin main"
