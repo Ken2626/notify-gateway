@@ -698,8 +698,6 @@ def validate_ingest_event(raw: Any) -> str | None:
         status = str(raw.get("status")).strip().lower()
         if status not in {"firing", "resolved"}:
             return "status must be firing|resolved"
-        if status == "resolved" and not raw.get("endsAt"):
-            return "endsAt is required when status=resolved"
 
     if raw.get("labels") is not None and not isinstance(raw.get("labels"), dict):
         return "labels must be an object when provided"
