@@ -1,3 +1,12 @@
+"""
+用途：notify-gateway 的主应用入口，负责接收 bot/alertmanager 上报事件，
+并依据 severity、source、channel/tag 等规则完成通知分发。
+
+实现说明：
+1. 对外提供 FastAPI 接口，兼容单事件 ingest 与 alertmanager payload。
+2. 路由支持 severity 默认分发、source 定向分发、事件级 channels 覆盖，以及去重/重试。
+3. source 路由匹配支持 `botname@host` 自动回退到 `botname`，从而避免为不同主机重复配置同一 bot 的 tag。
+"""
 from __future__ import annotations
 
 import asyncio
@@ -490,6 +499,22 @@ def map_channels_to_tags(channels: list[str], config: AppConfig) -> list[str]:
     return uniq(tags)
 
 
+def resolve_source_route(source: str, config: AppConfig) -> dict[str, list[str]]:
+    normalized = source.strip().lower()
+    if not normalized:
+        return {}
+
+    exact_match = config.source_route_by_severity.get(normalized, {})
+    if exact_match:
+        return exact_match
+
+    base_source, separator, _ = normalized.partition("@")
+    if separator and base_source:
+        return config.source_route_by_severity.get(base_source, {})
+
+    return {}
+
+
 def resolve_target_tags(alert: dict[str, Any], config: AppConfig) -> list[str]:
     labels = alert.get("labels") if isinstance(alert.get("labels"), dict) else {}
     annotations = alert.get("annotations") if isinstance(alert.get("annotations"), dict) else {}
@@ -504,7 +529,7 @@ def resolve_target_tags(alert: dict[str, Any], config: AppConfig) -> list[str]:
     source = str(labels.get("source") or config.default_source).strip().lower()
     severity = normalize_severity(labels.get("severity"))
 
-    source_route = config.source_route_by_severity.get(source, {})
+    source_route = resolve_source_route(source, config)
     if severity in source_route and source_route[severity]:
         return uniq(source_route[severity])
 
