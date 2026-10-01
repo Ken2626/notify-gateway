@@ -67,7 +67,7 @@ def parse_positive_int(raw: Any, fallback: int) -> int:
 
 
 def parse_retry_schedule(raw: Any) -> list[int]:
-    default = [1000, 2000, 4000]
+    default = [180000, 300000, 300000]
     parsed: list[int] = []
     for item in parse_csv_list(raw):
         try:
@@ -758,7 +758,7 @@ def create_app() -> FastAPI:
     notifier = AppriseNotifier(config)
     state = AppState(config, notifier)
 
-    app = FastAPI(title="notify-gateway", version="2.0.0")
+    app = FastAPI(title="notify-gateway", version="2.1.0")
     app.state.gateway = state
 
     async def dispatch_payload_safe(payload: dict[str, Any]) -> None:
