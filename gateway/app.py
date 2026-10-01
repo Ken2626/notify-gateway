@@ -643,23 +643,86 @@ async def send_with_retry(
     raise RuntimeError(str(last_error or "send failed without explicit error"))
 
 
+class DispatchQueue:
+    """进程内串行发送队列：逐条发送、失败退避重试至上限，消息只延迟不因瞬时 429 丢失。"""
+
+    def __init__(
+        self,
+        logger: logging.Logger,
+        sender=None,
+        spacing_s: float = 1.1,
+        backoff_schedule_s: tuple[float, ...] = (60.0, 120.0, 300.0, 600.0, 900.0),
+        give_up_after_s: float = 5400.0,
+    ) -> None:
+        self.logger = logger
+        self.sender = sender
+        self.spacing_s = spacing_s
+        self.backoff_schedule_s = backoff_schedule_s
+        self.give_up_after_s = give_up_after_s
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._worker: asyncio.Task | None = None
+
+    async def enqueue(self, tag: str, message: dict[str, str]) -> None:
+        if self._worker is None or self._worker.done():
+            self._worker = asyncio.create_task(self._run())
+        await self._queue.put((tag, message))
+
+    async def _run(self) -> None:
+        while True:
+            tag, message = await self._queue.get()
+            try:
+                await self._deliver(tag, message)
+            except Exception as exc:
+                self.logger.exception("dispatch worker error: %s", exc)
+            finally:
+                self._queue.task_done()
+            if self.spacing_s > 0:
+                await asyncio.sleep(self.spacing_s)
+
+    async def _deliver(self, tag: str, message: dict[str, str]) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.give_up_after_s
+        attempt = 0
+        while True:
+            try:
+                await self.sender(tag, message)
+                self.logger.info("channel delivered", extra={"tag": tag, "attempts": attempt + 1})
+                return
+            except Exception as exc:
+                if loop.time() >= deadline:
+                    self.logger.error(
+                        "channel dropped after backoff window",
+                        extra={"tag": tag, "attempts": attempt + 1, "error": str(exc)},
+                    )
+                    return
+                wait = self.backoff_schedule_s[min(attempt, len(self.backoff_schedule_s) - 1)]
+                wait = max(0.0, min(wait, deadline - loop.time()))
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                attempt += 1
+
+    async def flush(self) -> None:
+        await self._queue.join()
+
+
 async def dispatch_payload(
     payload: dict[str, Any],
     config: AppConfig,
     dedupe_cache: DedupeCache,
-    notifier: AppriseNotifier,
+    queue: DispatchQueue,
     logger: logging.Logger,
 ) -> dict[str, int]:
     alerts = payload.get("alerts")
     if not isinstance(alerts, list):
         raise ValueError("invalid alertmanager payload: alerts must be an array")
 
-    counters = {"sent": 0, "skipped": 0, "failed": 0}
+    counters = {"accepted": 0, "skipped": 0}
     payload_status = payload.get("status")
 
     for alert in alerts:
         if not isinstance(alert, dict):
-            counters["failed"] += 1
+            logger.warning("invalid alert entry dropped")
+            counters["skipped"] += 1
             continue
 
         tags = resolve_target_tags(alert, config)
@@ -681,18 +744,8 @@ async def dispatch_payload(
                 logger.info("dedupe suppressed duplicate notification", extra={"tag": tag, "fingerprint": fingerprint})
                 continue
 
-            try:
-                result = await send_with_retry(tag, message, notifier, config.retry_schedule_ms, logger)
-                if result == "sent":
-                    counters["sent"] += 1
-                else:
-                    counters["skipped"] += 1
-            except Exception as exc:  # pragma: no cover - exercised in integration
-                counters["failed"] += 1
-                logger.error(
-                    "channel delivery failed after retries",
-                    extra={"tag": tag, "fingerprint": fingerprint, "error": str(exc)},
-                )
+            await queue.enqueue(tag, message)
+            counters["accepted"] += 1
 
     return counters
 
@@ -741,10 +794,11 @@ def validate_ingest_event(raw: Any) -> str | None:
 
 
 class AppState:
-    def __init__(self, config: AppConfig, notifier: AppriseNotifier) -> None:
+    def __init__(self, config: AppConfig, notifier: AppriseNotifier, queue: DispatchQueue) -> None:
         self.config = config
         self.notifier = notifier
         self.dedupe = DedupeCache(config.dedupe_window_ms)
+        self.queue = queue
 
 
 def create_app() -> FastAPI:
@@ -756,14 +810,18 @@ def create_app() -> FastAPI:
 
     config = load_config_from_env(os.environ)
     notifier = AppriseNotifier(config)
-    state = AppState(config, notifier)
 
-    app = FastAPI(title="notify-gateway", version="2.1.0")
+    async def gateway_sender(tag: str, message: dict[str, str]) -> None:
+        await send_with_retry(tag, message, notifier, config.retry_schedule_ms, logger)
+
+    state = AppState(config, notifier, DispatchQueue(logger=logger, sender=gateway_sender))
+
+    app = FastAPI(title="notify-gateway", version="2.2.0")
     app.state.gateway = state
 
     async def dispatch_payload_safe(payload: dict[str, Any]) -> None:
         try:
-            counters = await dispatch_payload(payload, config, state.dedupe, notifier, logger)
+            counters = await dispatch_payload(payload, config, state.dedupe, state.queue, logger)
             logger.info("payload dispatched", extra=counters)
         except Exception as exc:
             logger.exception("background dispatch failed: %s", exc)
@@ -831,7 +889,7 @@ def create_app() -> FastAPI:
             return JSONResponse(status_code=400, content={"error": "invalid alertmanager payload"})
 
         try:
-            counters = await dispatch_payload(body, config, state.dedupe, notifier, logger)
+            counters = await dispatch_payload(body, config, state.dedupe, state.queue, logger)
         except ValueError as exc:
             return JSONResponse(status_code=400, content={"error": str(exc)})
 
